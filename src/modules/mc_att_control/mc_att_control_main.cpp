@@ -125,6 +125,20 @@ MulticopterAttitudeControl::MulticopterAttitudeControl() :
 		_sensor_correction.gyro_scale_2[i] = 1.0f;
 	}
 
+    // MRACのパラメータの初期化
+    // TODO commented out for space
+    _K1_ori.zero();
+    _K2_ori.zero();
+    _kappa_ori.zero();
+    _sigma_ori.zero();
+    _dz_ori.zero();
+    _ddz_ori.zero();
+    _rot.zero();
+    _rot_des.zero();
+    _rot_ref.zero();
+    _rot_ref_d.zero();
+    _gamma_ori.zero();
+
 	parameters_updated();
 }
 
@@ -188,6 +202,31 @@ MulticopterAttitudeControl::parameters_updated()
 			M_DEG_TO_RAD_F * _board_offset_y.get(),
 			M_DEG_TO_RAD_F * _board_offset_z.get()));
 	_board_rotation = board_rotation_offset * _board_rotation;
+
+    /* get MRAC parameters */
+    _ori_ad(0) = _ismrac_roll.get();
+    _ori_ad(1) = _ismrac_pitch.get();
+    _ori_ad(2) = _ismrac_yaw.get();
+    _k1m_ori(0) = _k1m_roll.get();
+    _k1m_ori(1) = _k1m_roll.get();
+    _k1m_ori(2) = _k1m_yaw.get();
+    _k2m_ori(0) = _k2m_roll.get();
+    _k2m_ori(1) = _k2m_roll.get();
+    _k2m_ori(2) = _k2m_yaw.get();
+    _K1_ori(0,0) = _k1_roll.get();
+    _K1_ori(1,1) = _k1_roll.get();
+    _K1_ori(2,2) = _k1_yaw.get();
+    _K2_ori(0,0) = _k2_roll.get();
+    _K2_ori(1,1) = _k2_roll.get();
+    _K2_ori(2,2) = _k2_yaw.get();
+    _kappa_ori(0,0) = _kappa_roll.get()/1000;
+    _kappa_ori(1,1) = _kappa_roll.get()/1000;
+    _kappa_ori(2,2) = _kappa_yaw.get();
+    _kappa_ori(6,6) = _kappa_dx.get();
+    _kappa_ori(7,7) = _kappa_dx.get();
+    _sigma_ori.setAll(_sigma.get());
+    _dz_ori.setAll(_dz.get()/1000);
+    _ddz_ori.setAll(_ddz.get()/1000);
 }
 
 void
@@ -387,6 +426,10 @@ MulticopterAttitudeControl::control_attitude(float dt)
 	q.normalize();
 	qd.normalize();
 
+  // 現在と目標のオイラー角を取得
+  _rot = Eulerf{q};
+  _rot_des = Eulerf{qd};
+
 	/* calculate reduced desired attitude neglecting vehicle's yaw to prioritize roll and pitch */
 	Vector3f e_z = q.dcm_z();
 	Vector3f e_z_d = qd.dcm_z();
@@ -476,6 +519,9 @@ MulticopterAttitudeControl::control_attitude_rates(float dt)
 	/* reset integral if disarmed */
 	if (!_v_control_mode.flag_armed || !_vehicle_status.is_rotary_wing) {
 		_rates_int.zero();
+    // 適応制御
+    _gamma_ori.zero();
+    _rot_ref.zero();
 	}
 
 	// get the raw gyro data and correct for thermal errors
@@ -528,6 +574,65 @@ MulticopterAttitudeControl::control_attitude_rates(float dt)
 	_rates_prev = rates;
 	_rates_prev_filtered = rates_filtered;
 
+    // 適応制御
+    Vector3f e_ori = _rot - _rot_ref;
+    Vector3f edot_ori = rates_filtered - _rot_ref_d;
+    // Dead zone modification
+    if (e_ori(0) > _dz_ori(0)) {
+      e_ori(0) = e_ori(0) - _dz_ori(0);
+    } else if (e_ori(0) < -_dz_ori(0)) {
+      e_ori(0) = e_ori(0) + _dz_ori(0);
+    } else {
+      e_ori(0) = 0;
+    }
+    if (e_ori(1) > _dz_ori(1)) {
+      e_ori(1) = e_ori(1) - _dz_ori(1);
+    } else if (e_ori(1) < -_dz_ori(1)) {
+      e_ori(1) = e_ori(1) + _dz_ori(1);
+    } else {
+      e_ori(1) = 0;
+    }
+    if (edot_ori(0) > _ddz_ori(0)) {
+      edot_ori(0) = edot_ori(0) - _ddz_ori(0);
+    } else if (edot_ori(0) < -_ddz_ori(0)) {
+      edot_ori(0) = edot_ori(0) + _ddz_ori(0);
+    } else {
+      edot_ori(0) = 0;
+    }
+    if (edot_ori(1) > _ddz_ori(1)) {
+      edot_ori(1) = edot_ori(1) - _ddz_ori(1);
+    } else if (edot_ori(1) < -_ddz_ori(1)) {
+      edot_ori(1) = edot_ori(1) + _ddz_ori(1);
+    } else {
+      edot_ori(1) = 0;
+    }
+    Vector3f tmp = _K1_ori*edot_ori- (_k1m_ori.emult(_rot_des-_rot_ref) + _k2m_ori.emult(-_rot_ref_d));
+    Matrix<float,3,8> Phi_ori;
+    Phi_ori.zero();
+    Phi_ori(0,0)=tmp(0); Phi_ori(1,1)=tmp(1); Phi_ori(2,2)=tmp(2);
+    Phi_ori(0,3)=tmp(1); Phi_ori(0,5)=tmp(2); Phi_ori(0,6)=1.0;
+    Phi_ori(1,3)=tmp(0); Phi_ori(1,4)=tmp(2); Phi_ori(1,7)=1.0;
+    Phi_ori(2,4)=tmp(0); Phi_ori(2,5)=tmp(1);
+    /*
+    //Vector3f Moment_ad = -e_ori -Phi_ori*_gamma_ori- _K2_ori*(edot_ori+_K1_ori*e_ori);
+    // refactored components
+    Vector3f Moment_ad = -Phi_ori*_gamma_ori- _K2_ori*edot_ori - _K1_ori*e_ori;
+    // 適応制御とデフォルトのPID制御をミキシング
+    tmp.setOne();
+    _att_control = _att_control.emult(tmp-_ori_ad) + Moment_ad.emult(_ori_ad);
+    */
+
+    //別のミキシング方法
+    _att_control = _att_control - _ori_ad.emult(Phi_ori * _gamma_ori);
+
+    // PD 制御でテスト
+    //_att_control = _att_control.emult(tmp-_ori_ad) - _ori_ad.emult(_k1m_ori.emult(_rot-_rot_des) + _k2m_ori.emult(rates_filtered)); //k1m 0.6, k2m 0.1 in gazebo, k1m 0.3, k2m 0.1 in real quad
+    //_att_control = _att_control.emult(tmp-_ori_ad) - _ori_ad.emult(_k1m_ori.emult(_rot-_rot_des) + _k2m_ori.emult(rates_filtered - _rates_sp)); //ダメ、めっちゃ振動する
+    
+    // PD 制御器に適応制御分だけ加える
+    //_att_control = _att_control.emult(tmp-_ori_ad) - _ori_ad.emult(_k1m_ori.emult(_rot-_rot_des) + _k2m_ori.emult(rates_filtered) -Phi_ori*_gamma_ori );
+
+
 	/* update integral only if we are not landed */
 	if (!_vehicle_land_detected.maybe_landed && !_vehicle_land_detected.landed) {
 		for (int i = AXIS_INDEX_ROLL; i < AXIS_COUNT; i++) {
@@ -563,6 +668,15 @@ MulticopterAttitudeControl::control_attitude_rates(float dt)
 
 			}
 		}
+
+    // 適応制御
+    // オイラー法で積分してパラメータを更新
+    _rot_ref += _rot_ref_d * dt;
+    //_rot_ref_d += (_k1m_ori.emult(_rot_des-_rot_ref) + _k2m_ori.emult(-_rot_ref_d)) *dt;
+    // Rate SP を入れてみたバージョン
+    _rot_ref_d += (_k1m_ori.emult(_rot_des-_rot_ref) + _k2m_ori.emult(_rates_sp-_rot_ref_d)) *dt;
+    _gamma_ori += (_kappa_ori*Phi_ori.transpose()*(edot_ori+_K1_ori*e_ori) -_sigma_ori.emult(_gamma_ori)) *dt;
+
 	}
 
 	/* explicitly limit the integrator state */
@@ -768,7 +882,28 @@ MulticopterAttitudeControl::run()
 
 				int instance;
 				orb_publish_auto(ORB_ID(rate_ctrl_status), &_controller_status_pub, &rate_ctrl_status, &instance, ORB_PRIO_DEFAULT);
+
+        /* publish mrac parameters */
+        mrac_params_s mrac_params;
+        mrac_params.timestamp = hrt_absolute_time();
+        mrac_params.gamma[0] = _gamma_ori(0);
+        mrac_params.gamma[1] = _gamma_ori(1);
+        mrac_params.gamma[2] = _gamma_ori(2);
+        mrac_params.gamma[3] = _gamma_ori(3);
+        mrac_params.gamma[4] = _gamma_ori(4);
+        mrac_params.gamma[5] = _gamma_ori(5);
+        mrac_params.gamma[6] = _gamma_ori(6);
+        mrac_params.gamma[7] = _gamma_ori(7);
+				orb_publish_auto(ORB_ID(mrac_params), &_mrac_params_pub, &mrac_params, &instance, ORB_PRIO_DEFAULT);
+
+        mrac_att_ref_s mrac_att_ref;
+        mrac_att_ref.timestamp = hrt_absolute_time();
+        mrac_att_ref.roll = _rot_ref(0);
+        mrac_att_ref.pitch = _rot_ref(1);
+        mrac_att_ref.yaw = _rot_ref(2);
+				orb_publish_auto(ORB_ID(mrac_att_ref), &_mrac_att_ref_pub, &mrac_att_ref, &instance, ORB_PRIO_DEFAULT);
 			}
+
 
 			if (_v_control_mode.flag_control_termination_enabled) {
 				if (!_vehicle_status.is_vtol) {
@@ -838,7 +973,7 @@ MulticopterAttitudeControl::run()
 
 int MulticopterAttitudeControl::task_spawn(int argc, char *argv[])
 {
-	_task_id = px4_task_spawn_cmd("mc_att_control",
+	_task_id = px4_task_spawn_cmd("mc_att_cqttontrol",
 					   SCHED_DEFAULT,
 					   SCHED_PRIORITY_ATTITUDE_CONTROL,
 					   1700,

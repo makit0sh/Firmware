@@ -75,6 +75,8 @@ set(msg_files
 	mission_result.msg
 	mount_orientation.msg
 	multirotor_motor_limits.msg
+  mrac_params.msg
+  mrac_att_ref.msg
 	obstacle_distance.msg
 	offboard_control_mode.msg
 	optical_flow.msg

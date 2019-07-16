@@ -56,6 +56,8 @@
 #include <uORB/topics/vehicle_rates_setpoint.h>
 #include <uORB/topics/vehicle_status.h>
 #include <uORB/topics/vehicle_land_detected.h>
+#include <uORB/topics/mrac_params.h>
+#include <uORB/topics/mrac_att_ref.h>
 
 /**
  * Multicopter attitude control app start / stop handling function
@@ -146,6 +148,8 @@ private:
 	orb_advert_t	_v_rates_sp_pub{nullptr};		/**< rate setpoint publication */
 	orb_advert_t	_actuators_0_pub{nullptr};		/**< attitude actuator controls publication */
 	orb_advert_t	_controller_status_pub{nullptr};	/**< controller status publication */
+	orb_advert_t	_mrac_params_pub{nullptr};	/**< mrac parameters publication */
+	orb_advert_t	_mrac_att_ref_pub{nullptr};	/**< mrac parameters publication */
 
 	orb_id_t _rates_sp_id{nullptr};		/**< pointer to correct rates setpoint uORB metadata structure */
 	orb_id_t _actuators_id{nullptr};	/**< pointer to correct actuator controls0 uORB metadata structure */
@@ -234,7 +238,31 @@ private:
 
 		(ParamFloat<px4::params::SENS_BOARD_X_OFF>) _board_offset_x,
 		(ParamFloat<px4::params::SENS_BOARD_Y_OFF>) _board_offset_y,
-		(ParamFloat<px4::params::SENS_BOARD_Z_OFF>) _board_offset_z
+		(ParamFloat<px4::params::SENS_BOARD_Z_OFF>) _board_offset_z,
+
+        (ParamFloat<px4::params::MC_ISMRAC_ROLL>) _ismrac_roll,
+        (ParamFloat<px4::params::MC_ISMRAC_PITCH>) _ismrac_pitch,
+        (ParamFloat<px4::params::MC_ISMRAC_YAW>) _ismrac_yaw,
+        (ParamFloat<px4::params::MC_MRAC_K1M_ROLL>) _k1m_roll,
+        //(ParamFloat<px4::params::MC_MRAC_K1MPITCH>) _k1m_pitch,
+        (ParamFloat<px4::params::MC_MRAC_K1M_YAW>) _k1m_yaw,
+        (ParamFloat<px4::params::MC_MRAC_K2M_ROLL>) _k2m_roll,
+        //(ParamFloat<px4::params::MC_MRAC_K2MPITCH>) _k2m_pitch,
+        (ParamFloat<px4::params::MC_MRAC_K2M_YAW>) _k2m_yaw,
+        (ParamFloat<px4::params::MC_MRAC_K1_ROLL>) _k1_roll,
+        //(ParamFloat<px4::params::MC_MRAC_K1_PITCH>) _k1_pitch,
+        (ParamFloat<px4::params::MC_MRAC_K1_YAW>) _k1_yaw,
+        (ParamFloat<px4::params::MC_MRAC_K2_ROLL>) _k2_roll,
+        //(ParamFloat<px4::params::MC_MRAC_K2_PITCH>) _k2_pitch,
+        (ParamFloat<px4::params::MC_MRAC_K2_YAW>) _k2_yaw,
+        (ParamFloat<px4::params::MC_MRAC_KPA_ROLL>) _kappa_roll,
+        //(ParamFloat<px4::params::MC_MRAC_KPAPITCH>) _kappa_pitch,
+        (ParamFloat<px4::params::MC_MRAC_KPA_YAW>) _kappa_yaw,
+        //(ParamFloat<px4::params::MC_MRAC_KPA_DY>) _kappa_dy,
+        (ParamFloat<px4::params::MC_MRAC_KPA_DX>) _kappa_dx,
+        (ParamFloat<px4::params::MC_MRAC_SIGMA>) _sigma,
+        (ParamFloat<px4::params::MC_MRAC_DZ>) _dz,
+        (ParamFloat<px4::params::MC_MRAC_DDZ>) _ddz
 	)
 
 	matrix::Vector3f _attitude_p;		/**< P gain for attitude control */
@@ -248,5 +276,20 @@ private:
 	matrix::Vector3f _auto_rate_max;	/**< attitude rate limits in auto modes */
 	matrix::Vector3f _acro_rate_max;	/**< max attitude rates in acro mode */
 
+    /* MRACの組み込みのために必要な変数 */
+    matrix::Eulerf _rot;      /**< 姿勢角(オイラー角) */
+    matrix::Eulerf _rot_des;      /**< 目標姿勢角(オイラー角) */
+    matrix::Vector3f _rot_ref;      /**< 規範モデル */
+    matrix::Vector3f _rot_ref_d;    /**< 規範モデルの微係数 */
+    matrix::Vector<float, 8> _gamma_ori; /**< 適応パラメータ */
+    matrix::Vector3f _ori_ad; /**< 適応制御をミキシング */
+    matrix::Vector3f _k1m_ori; /**< 規範モデルの1次のパラメータ */
+    matrix::Vector3f _k2m_ori; /**< 規範モデルの2次のパラメータ */
+    matrix::Matrix<float,3,3> _K1_ori; /**< MRACのパラメータ */
+    matrix::Matrix<float,3,3> _K2_ori; /**< MRACのパラメータ */
+    matrix::Matrix<float,8,8> _kappa_ori; /**< MRAC学習率 */
+    matrix::Vector<float,8> _sigma_ori; /**< 定数型シグマ修正法 */
+    matrix::Vector3f _dz_ori; /**< Dead Zone 修正法 */
+    matrix::Vector3f _ddz_ori; /**< Dead Zone 修正法 */
 };
 
